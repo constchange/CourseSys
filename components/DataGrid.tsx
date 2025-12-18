@@ -234,7 +234,7 @@ const DataGrid: React.FC<Props> = ({ data, columns, onUpdate, onDeleteRows, onAd
                                 <div className="relative w-full h-full">
                                     <div 
                                         className="w-full h-full p-2 truncate cursor-pointer hover:bg-slate-50 flex items-center"
-                                        onClick={() => setOpenMultiSelect(openMultiSelect?.rowId === row.id && openMultiSelect.field === col.field ? null : {rowId: row.id, field: col.field})}
+                                        onClick={() => setOpenMultiSelect(openMultiSelect?.rowId === row.id && openMultiSelect?.field === col.field ? null : {rowId: row.id, field: col.field})}
                                     >
                                         <span className="text-xs">{Array.isArray(cellValue) && cellValue.length > 0 ? `${cellValue.length} selected` : 'Select...'}</span>
                                         <ChevronDown size={12} className="ml-auto text-slate-400"/>
