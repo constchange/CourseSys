@@ -2,6 +2,47 @@ import React, { createContext, useContext, useEffect, useState } from 'react';
 import { supabase } from './supabaseClient';
 import { AppState, Course, Person, Session, ScheduleParams } from './types';
 
+// --- 1. 定义数据库白名单 (DB Schema Definition) ---
+// 只有在这里列出的字段才会被发送到 Supabase。
+// 任何前端临时字段 (如 sessionCount, totalHours, excel里的额外列) 都会被自动过滤。
+const DB_SCHEMA = {
+  people: [
+    'id', 'name', 'gender', 'dob', 
+    'juniorHigh', 'seniorHigh', 'university', 'researchLab',
+    'workHistory', 'currentUnit', 
+    'difficultyRange', 'preferences', 
+    'phone', 'wechat', 'address', 'bankAccount', 
+    'type'
+  ],
+  courses: [
+    'id', 'name', 'type', 'difficulty', 'module', 'semester', 
+    'location', 'startDate', 'endDate', 
+    'defaultStartTime', 'defaultEndTime', 
+    'teacherIds', 'assistantIds', 'notes'
+    // 注意：sessionCount 和 totalHours 是前端计算属性，不存数据库，所以不写在这里
+  ],
+  sessions: [
+    'id', 'courseId', 'sequence', 'topic', 
+    'teacherIds', 'assistantIds', 
+    'date', 'startTime', 'endTime', 'durationHours', 
+    'notes'
+  ]
+};
+
+// --- 2. 数据清洗函数 (Sanitizer) ---
+const sanitize = (data: any, table: keyof typeof DB_SCHEMA) => {
+  const allowedFields = DB_SCHEMA[table];
+  const cleanData: any = {};
+  
+  allowedFields.forEach(field => {
+    if (data[field] !== undefined) {
+      cleanData[field] = data[field];
+    }
+  });
+  
+  return cleanData;
+};
+
 interface AppContextType extends AppState {
   addPerson: (p: Person) => void;
   updatePerson: (p: Person) => void;
@@ -40,21 +81,17 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const fetchData = async () => {
       setIsLoading(true);
       try {
-        // 并行请求三个表的数据
         const [peopleRes, coursesRes, sessionsRes] = await Promise.all([
           supabase.from('people').select('*'),
           supabase.from('courses').select('*'),
           supabase.from('sessions').select('*')
         ]);
-
-        // 注意：如果允许匿名读取，这些应该能成功。如果 RLS 禁止读取，这里会报错。
-        // 但为了 Debug 模式体验，如果读取失败，我们仅 log 错误，不阻断 UI 渲染（使用空数据或 Mock 数据）
         
         const people = (peopleRes.data as Person[]) || [];
         const coursesRaw = (coursesRes.data as Course[]) || [];
         const sessions = (sessionsRes.data as Session[]) || [];
 
-        // 重新计算课程统计数据
+        // 前端计算统计数据
         const courses = coursesRaw.map(c => {
              const cSessions = sessions.filter(s => s.courseId === c.id);
              const totalHours = cSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
@@ -72,14 +109,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           courses: courses,
           sessions: sessions
         }));
-        
-        if (peopleRes.error) console.warn("Fetch People Error (Cloud):", peopleRes.error);
-        if (coursesRes.error) console.warn("Fetch Courses Error (Cloud):", coursesRes.error);
-        if (sessionsRes.error) console.warn("Fetch Sessions Error (Cloud):", sessionsRes.error);
 
+        if (peopleRes.error) console.error("Fetch People Error:", peopleRes.error);
+        
       } catch (error: any) {
-        console.error("数据加载失败:", error);
-        // 不 alert，以免在未配置好 DB 时打扰用户
+        console.error("Critical Load Error:", error);
       } finally {
         setIsLoading(false);
       }
@@ -104,26 +138,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --- 人员管理 (Person) ---
   const addPerson = async (p: Person) => {
-    // 1. 乐观更新
-    if (p.type === 'Teacher') {
-      setState(prev => ({ ...prev, teachers: [...prev.teachers, p] }));
-    } else {
-      setState(prev => ({ ...prev, assistants: [...prev.assistants, p] }));
-    }
-    // 2. 发送给 Supabase
-    const { error } = await supabase.from('people').insert([p]);
-    if (error) console.error("Add Person Error (Cloud):", error);
+    // Optimistic Update
+    if (p.type === 'Teacher') setState(prev => ({ ...prev, teachers: [...prev.teachers, p] }));
+    else setState(prev => ({ ...prev, assistants: [...prev.assistants, p] }));
+    
+    // Cloud Update (Sanitized)
+    const payload = sanitize(p, 'people');
+    const { error } = await supabase.from('people').insert([payload]);
+    if (error) console.error("Add Person Error:", error);
   };
 
   const updatePerson = async (p: Person) => {
-    if (p.type === 'Teacher') {
-      setState(prev => ({ ...prev, teachers: prev.teachers.map(t => t.id === p.id ? p : t) }));
-    } else {
-      setState(prev => ({ ...prev, assistants: prev.assistants.map(a => a.id === p.id ? p : a) }));
-    }
-    const { id, ...updates } = p;
-    const { error } = await supabase.from('people').update(updates).eq('id', id);
-    if (error) console.error("Update Person Error (Cloud):", error);
+    if (p.type === 'Teacher') setState(prev => ({ ...prev, teachers: prev.teachers.map(t => t.id === p.id ? p : t) }));
+    else setState(prev => ({ ...prev, assistants: prev.assistants.map(a => a.id === p.id ? p : a) }));
+    
+    // Cloud Update (Sanitized)
+    const payload = sanitize(p, 'people');
+    const { id } = p; 
+    // Delete ID from payload for update if Supabase dislikes updating PK (usually fine, but cleaner to remove)
+    delete payload.id; 
+    
+    const { error } = await supabase.from('people').update(payload).eq('id', id);
+    if (error) console.error("Update Person Error:", error);
   };
 
   const deletePerson = async (id: string) => {
@@ -133,21 +169,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       assistants: prev.assistants.filter(a => a.id !== id)
     }));
     const { error } = await supabase.from('people').delete().eq('id', id);
-    if (error) console.error("Delete Person Error (Cloud):", error);
+    if (error) console.error("Delete Person Error:", error);
   };
 
   // --- 课程管理 (Course) ---
   const addCourse = async (c: Course) => {
     setState(prev => ({ ...prev, courses: [...prev.courses, c] }));
-    const { error } = await supabase.from('courses').insert([c]);
-    if (error) console.error("Add Course Error (Cloud):", error);
+    
+    const payload = sanitize(c, 'courses');
+    const { error } = await supabase.from('courses').insert([payload]);
+    if (error) console.error("Add Course Error:", error);
   };
 
   const updateCourse = async (c: Course) => {
     setState(prev => ({ ...prev, courses: prev.courses.map(x => x.id === c.id ? c : x) }));
-    const { id, ...updates } = c;
-    const { error } = await supabase.from('courses').update(updates).eq('id', id);
-    if (error) console.error("Update Course Error (Cloud):", error);
+    
+    const payload = sanitize(c, 'courses');
+    delete payload.id;
+    const { error } = await supabase.from('courses').update(payload).eq('id', c.id);
+    if (error) console.error("Update Course Error:", error);
   };
   
   const deleteCourse = async (id: string) => {
@@ -158,7 +198,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }));
     await supabase.from('sessions').delete().eq('courseId', id);
     const { error } = await supabase.from('courses').delete().eq('id', id);
-    if (error) console.error("Delete Course Error (Cloud):", error);
+    if (error) console.error("Delete Course Error:", error);
   };
 
   // --- 课节管理 (Session) ---
@@ -168,8 +208,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const updatedCourses = recalculateCourseStats(prev.courses, newSessions, s.courseId);
       return { ...prev, sessions: newSessions, courses: updatedCourses };
     });
-    const { error } = await supabase.from('sessions').insert([s]);
-    if (error) console.error("Add Session Error (Cloud):", error);
+    
+    const payload = sanitize(s, 'sessions');
+    const { error } = await supabase.from('sessions').insert([payload]);
+    if (error) console.error("Add Session Error:", error);
   };
 
   const updateSession = async (s: Session) => {
@@ -182,9 +224,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       }
       return { ...prev, sessions: newSessions, courses: updatedCourses };
     });
-    const { id, ...updates } = s;
-    const { error } = await supabase.from('sessions').update(updates).eq('id', id);
-    if (error) console.error("Update Session Error (Cloud):", error);
+    
+    const payload = sanitize(s, 'sessions');
+    delete payload.id;
+    const { error } = await supabase.from('sessions').update(payload).eq('id', s.id);
+    if (error) console.error("Update Session Error:", error);
   };
 
   const deleteSession = async (id: string) => {
@@ -198,7 +242,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { ...prev, sessions: newSessions, courses: updatedCourses };
     });
     const { error } = await supabase.from('sessions').delete().eq('id', id);
-    if (error) console.error("Delete Session Error (Cloud):", error);
+    if (error) console.error("Delete Session Error:", error);
   };
 
   const updateScheduleParams = (params: Partial<ScheduleParams>) => {
@@ -210,59 +254,56 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --- 数据导入 (Batch) ---
   const importData = async (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => {
-    // Person (people table) valid fields whitelist
-    const personFields = [
-      'id', 'name', 'gender', 'dob', 
-      'juniorHigh', 'seniorHigh', 'university', 'researchLab',
-      'workHistory', 'currentUnit', 
-      'difficultyRange', 'preferences', 
-      'phone', 'wechat', 'address', 'bankAccount', 
-      'type'
-    ];
-
-    // 1. 预处理数据
+    // 1. 标准化数据结构
     const processedData = data.map(item => {
-        let newItem: any = {
+        const newItem: any = {
             ...item,
             id: item.id || crypto.randomUUID(),
         };
 
-        if (type === 'teachers' || type === 'assistants') {
-            // Whitelist filtering for People
-            const filteredItem: any = {};
-            personFields.forEach(field => {
-                if (newItem[field] !== undefined) {
-                    filteredItem[field] = newItem[field];
-                }
-            });
-            // Ensure type is correct even if not in CSV or wrong
-            filteredItem.type = type === 'teachers' ? 'Teacher' : 'TA';
-            newItem = filteredItem;
-        } else if (type === 'courses' || type === 'sessions') {
-            // Logic for Courses/Sessions (keep as is, add array handling)
+        // 处理数组字段，防止 CSV 导入时为空或格式错误
+        if (type === 'courses' || type === 'sessions') {
             newItem.teacherIds = Array.isArray(item.teacherIds) ? item.teacherIds : (item.teacherIds ? [item.teacherIds] : []);
             newItem.assistantIds = Array.isArray(item.assistantIds) ? item.assistantIds : (item.assistantIds ? [item.assistantIds] : []);
-            
-            if (type === 'sessions') {
-                newItem.sequence = item.sequence ? Number(item.sequence) : 0;
-                newItem.durationHours = item.durationHours ? Number(item.durationHours) : 0;
-            }
-            
-            if (type === 'courses') {
-                newItem.sessionCount = 0; // Reset stats
-                newItem.totalHours = 0;   // Reset stats
-            }
+        }
+
+        // 确保特定字段类型正确
+        if (type === 'sessions') {
+             newItem.sequence = item.sequence ? Number(item.sequence) : 0;
+             newItem.durationHours = item.durationHours ? Number(item.durationHours) : 0;
+        }
+
+        // 确保人员类型正确
+        if (type === 'teachers') newItem.type = 'Teacher';
+        if (type === 'assistants') newItem.type = 'TA';
+
+        // Course 初始化统计字段 (仅用于本地显示，sanitize 会在发送前移除它们)
+        if (type === 'courses') {
+            newItem.sessionCount = 0;
+            newItem.totalHours = 0;
         }
 
         return newItem;
     });
 
     let tableName = '';
-    if (type === 'teachers' || type === 'assistants') tableName = 'people';
-    else if (type === 'courses') tableName = 'courses';
-    else if (type === 'sessions') tableName = 'sessions';
+    let schemaType: keyof typeof DB_SCHEMA;
 
-    // 2. 更新本地 State (Optimistic)
+    if (type === 'teachers' || type === 'assistants') {
+        tableName = 'people';
+        schemaType = 'people';
+    } else if (type === 'courses') {
+        tableName = 'courses';
+        schemaType = 'courses';
+    } else {
+        tableName = 'sessions';
+        schemaType = 'sessions';
+    }
+
+    // 2. 清洗数据：只保留白名单字段
+    const sanitizedData = processedData.map(item => sanitize(item, schemaType));
+
+    // 3. 更新本地 State (Optimistic)
     setState(prev => {
         let newState = { ...prev };
         
@@ -284,6 +325,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
              else newState.sessions = [...prev.sessions, ...newItems];
         }
         
+        // 如果是导入 Sessions，重新计算 Course 统计
         if (type === 'sessions') {
              newState.courses = newState.courses.map(c => {
                  const cSessions = newState.sessions.filter(s => s.courseId === c.id);
@@ -295,19 +337,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return newState;
     });
 
-    // 3. 尝试同步到云端
+    // 4. 同步到云端
     try {
         if (mode === 'replace') {
             if (tableName === 'people') {
                 const pType = type === 'teachers' ? 'Teacher' : 'TA';
                 await supabase.from('people').delete().eq('type', pType);
             } else {
+                // 删除所有记录 (不推荐在生产环境这样做，但符合当前需求)
                 await supabase.from(tableName).delete().neq('id', '00000000-0000-0000-0000-000000000000');
             }
         }
 
-        const { error } = await supabase.from(tableName).insert(processedData);
-        if (error) throw error;
+        // 分批插入防止请求体过大
+        const BATCH_SIZE = 100;
+        for (let i = 0; i < sanitizedData.length; i += BATCH_SIZE) {
+            const batch = sanitizedData.slice(i, i + BATCH_SIZE);
+            const { error } = await supabase.from(tableName).insert(batch);
+            if (error) throw error;
+        }
         
     } catch (error: any) {
         console.error("Cloud Sync Error (Import):", error);
@@ -315,9 +363,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         let msg = 'Unknown Error';
         if (typeof error === 'string') msg = error;
         else if (error instanceof Error) msg = error.message;
-        else if (typeof error === 'object' && error !== null) {
-            msg = error.message || error.details || error.hint || (JSON.stringify(error) !== '{}' ? JSON.stringify(error) : 'Unknown Error Object');
-        }
+        else if (typeof error === 'object') msg = JSON.stringify(error);
 
         setTimeout(() => {
             alert(`已导入到本地视图，但云端同步失败 (可能是权限或网络问题): ${msg}`);
