@@ -210,43 +210,48 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // --- 数据导入 (Batch) ---
   const importData = async (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => {
+    // Person (people table) valid fields whitelist
+    const personFields = [
+      'id', 'name', 'gender', 'dob', 
+      'juniorHigh', 'seniorHigh', 'university', 'researchLab',
+      'workHistory', 'currentUnit', 
+      'difficultyRange', 'preferences', 
+      'phone', 'wechat', 'address', 'bankAccount', 
+      'type'
+    ];
+
     // 1. 预处理数据
     const processedData = data.map(item => {
-        const newItem: any = {
+        let newItem: any = {
             ...item,
             id: item.id || crypto.randomUUID(),
         };
 
-        // Course/Session 特有字段：只在导入这类数据时添加
-        if (type === 'courses' || type === 'sessions') {
+        if (type === 'teachers' || type === 'assistants') {
+            // Whitelist filtering for People
+            const filteredItem: any = {};
+            personFields.forEach(field => {
+                if (newItem[field] !== undefined) {
+                    filteredItem[field] = newItem[field];
+                }
+            });
+            // Ensure type is correct even if not in CSV or wrong
+            filteredItem.type = type === 'teachers' ? 'Teacher' : 'TA';
+            newItem = filteredItem;
+        } else if (type === 'courses' || type === 'sessions') {
+            // Logic for Courses/Sessions (keep as is, add array handling)
             newItem.teacherIds = Array.isArray(item.teacherIds) ? item.teacherIds : (item.teacherIds ? [item.teacherIds] : []);
             newItem.assistantIds = Array.isArray(item.assistantIds) ? item.assistantIds : (item.assistantIds ? [item.assistantIds] : []);
-        } else {
-            // People (Teachers/TA): 确保移除这些字段，防止 Schema 错误
-            delete newItem.teacherIds;
-            delete newItem.assistantIds;
-            // 移除可能意外混入的统计字段
-            delete newItem.sessionCount;
-            delete newItem.totalHours;
-            delete newItem.sequence;
-            delete newItem.durationHours;
-        }
-
-        // Session 特有字段
-        if (type === 'sessions') {
-            newItem.sequence = item.sequence ? Number(item.sequence) : 0;
-            newItem.durationHours = item.durationHours ? Number(item.durationHours) : 0;
-        } else {
-             if (type !== 'courses') { // courses might have totalHours, but usually computed. safe to remove for people
-                delete newItem.sequence;
-                delete newItem.durationHours;
-             }
-        }
-
-        // Course 特有初始化
-        if (type === 'courses') {
-            newItem.sessionCount = 0;
-            newItem.totalHours = 0;
+            
+            if (type === 'sessions') {
+                newItem.sequence = item.sequence ? Number(item.sequence) : 0;
+                newItem.durationHours = item.durationHours ? Number(item.durationHours) : 0;
+            }
+            
+            if (type === 'courses') {
+                newItem.sessionCount = 0; // Reset stats
+                newItem.totalHours = 0;   // Reset stats
+            }
         }
 
         return newItem;
