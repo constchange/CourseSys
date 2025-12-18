@@ -1,3 +1,4 @@
+
 import { Person, Session, Course } from './types';
 import { differenceInMinutes, format, areIntervalsOverlapping, endOfWeek, eachDayOfInterval, endOfMonth, isSameMonth, addDays, isValid, eachMonthOfInterval } from 'date-fns';
 
@@ -283,6 +284,7 @@ export const exportScheduleToHTML = (
   person: Person | { name: string; type: string },
   sessions: Session[],
   courses: Course[],
+  teachers: Person[], // Added teachers parameter to lookup names
   startMonthStr: string, // YYYY-MM
   endMonthStr: string,   // YYYY-MM
   colorMap: Record<string, string> = {}
@@ -341,12 +343,22 @@ export const exportScheduleToHTML = (
                 const course = courses.find(c => c.id === s.courseId);
                 const twClass = colorMap[s.courseId] || '';
                 const style = getColorStyle(twClass);
+                
+                // Retrieve teachers
+                const teacherIds = Array.isArray(s.teacherIds) ? s.teacherIds : [];
+                const sessionTeachers = teachers
+                    .filter(t => teacherIds.includes(t.id))
+                    .map(t => t.name)
+                    .join(', ');
 
                 cellContent += `
                     <div class="session" style="${style}">
                         <div class="time">${s.startTime}-${s.endTime}</div>
                         <div class="topic">${s.topic}</div>
-                        <div class="course">${course?.name || ''}</div>
+                        <div class="footer">
+                            <span class="course">${course?.name || ''}</span>
+                            <span class="teachers">${sessionTeachers}</span>
+                        </div>
                     </div>
                 `;
             });
@@ -396,10 +408,12 @@ export const exportScheduleToHTML = (
         td { vertical-align: top; height: 120px; padding: 5px; border: 1px solid #e2e8f0; background: #fff; }
         td.other-month { background: #f8fafc; color: #94a3b8; }
         .date-num { font-weight: bold; margin-bottom: 5px; text-align: right; }
-        .session { padding: 4px; margin-bottom: 4px; font-size: 0.85em; border-radius: 2px; border-left: 3px solid; }
+        .session { padding: 4px; margin-bottom: 4px; font-size: 0.85em; border-radius: 2px; border-left: 3px solid; display: flex; flex-direction: column; }
         .time { font-weight: bold; }
-        .topic { font-weight: 500; }
-        .course { font-size: 0.9em; opacity: 0.8; }
+        .topic { font-weight: 500; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+        .footer { display: flex; justify-content: space-between; font-size: 0.9em; opacity: 0.9; margin-top: 2px; }
+        .course { opacity: 0.8; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 60%; }
+        .teachers { text-align: right; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 40%; font-weight: 500; }
         @media print {
             .month-block { page-break-inside: avoid; }
         }

@@ -158,7 +158,13 @@ const ScheduleStats: React.FC = () => {
                 <input type="month" className="border p-2 rounded-lg" value={endMonth} onChange={e => updateScheduleParams({ endMonth: e.target.value })} />
             </div>
             {/* Export HTML -> Download Icon */}
-            <button disabled={!selectedPersonId} onClick={() => selectedPerson && exportScheduleToHTML(selectedPerson, personSessions, courses, startMonth, endMonth, courseColorMap)} className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50 h-[42px]"><Download size={18} /> Export HTML</button>
+            <button 
+                disabled={!selectedPersonId} 
+                onClick={() => selectedPerson && exportScheduleToHTML(selectedPerson, personSessions, courses, teachers, startMonth, endMonth, courseColorMap)} 
+                className="bg-blue-600 text-white px-4 py-2 rounded-lg flex items-center gap-2 hover:bg-blue-700 disabled:opacity-50 h-[42px]"
+            >
+                <Download size={18} /> Export HTML
+            </button>
           </div>
 
           <div className="flex-1 overflow-auto border rounded-lg bg-slate-50 p-4 space-y-8">
@@ -179,7 +185,7 @@ const ScheduleStats: React.FC = () => {
                                 {days.map(date => {
                                 const dateStr = format(date, 'yyyy-MM-dd');
                                 const isCurrent = isSameMonth(date, monthDate);
-                                // FIX: Use explicit string matching for safety, ensuring all months sessions show
+                                // Use explicit string matching for safety
                                 const daysSessions = personSessions.filter(s => s.date === dateStr).sort((a,b) => a.startTime.localeCompare(b.startTime));
                                 
                                 return (
@@ -188,11 +194,16 @@ const ScheduleStats: React.FC = () => {
                                         <div className="space-y-1">{daysSessions.map(s => {
                                             const courseName = courses.find(c => c.id === s.courseId)?.name;
                                             const colorClass = courseColorMap[s.courseId] || 'bg-slate-100 text-slate-800 border-slate-200';
+                                            const teacherNames = teachers.filter(t => s.teacherIds.includes(t.id)).map(t => t.name).join(', ');
+                                            
                                             return (
                                                 <div key={s.id} className={`text-xs p-1.5 rounded border-l-2 overflow-hidden ${colorClass}`}>
                                                     <div className="font-bold truncate">{s.startTime}-{s.endTime}</div>
                                                     <div className="truncate font-medium" title={s.topic}>{s.topic}</div>
-                                                    <div className="opacity-75 text-[10px] truncate">{courseName}</div>
+                                                    <div className="flex justify-between items-center opacity-75 text-[10px] mt-0.5 gap-2">
+                                                        <span className="truncate flex-1" title={courseName}>{courseName}</span>
+                                                        <span className="truncate text-right shrink-0 max-w-[50%] font-medium" title={teacherNames}>{teacherNames}</span>
+                                                    </div>
                                                 </div>
                                             );
                                             })}</div>
