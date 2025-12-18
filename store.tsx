@@ -211,19 +211,46 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   // --- 数据导入 (Batch) ---
   const importData = async (type: 'teachers' | 'assistants' | 'courses' | 'sessions', data: any[], mode: 'append' | 'replace') => {
     // 1. 预处理数据
-    const processedData = data.map(item => ({
-        ...item,
-        id: item.id || crypto.randomUUID(),
-        sequence: item.sequence ? Number(item.sequence) : 0,
-        durationHours: item.durationHours ? Number(item.durationHours) : 0,
-        // Course specific defaults
-        sessionCount: 0, 
-        totalHours: 0,
-        // Array handling
-        teacherIds: Array.isArray(item.teacherIds) ? item.teacherIds : [],
-        assistantIds: Array.isArray(item.assistantIds) ? item.assistantIds : [],
-        // Clean undefined/null to allow DB defaults if any (though we usually set all)
-    }));
+    const processedData = data.map(item => {
+        const newItem: any = {
+            ...item,
+            id: item.id || crypto.randomUUID(),
+        };
+
+        // Course/Session 特有字段：只在导入这类数据时添加
+        if (type === 'courses' || type === 'sessions') {
+            newItem.teacherIds = Array.isArray(item.teacherIds) ? item.teacherIds : (item.teacherIds ? [item.teacherIds] : []);
+            newItem.assistantIds = Array.isArray(item.assistantIds) ? item.assistantIds : (item.assistantIds ? [item.assistantIds] : []);
+        } else {
+            // People (Teachers/TA): 确保移除这些字段，防止 Schema 错误
+            delete newItem.teacherIds;
+            delete newItem.assistantIds;
+            // 移除可能意外混入的统计字段
+            delete newItem.sessionCount;
+            delete newItem.totalHours;
+            delete newItem.sequence;
+            delete newItem.durationHours;
+        }
+
+        // Session 特有字段
+        if (type === 'sessions') {
+            newItem.sequence = item.sequence ? Number(item.sequence) : 0;
+            newItem.durationHours = item.durationHours ? Number(item.durationHours) : 0;
+        } else {
+             if (type !== 'courses') { // courses might have totalHours, but usually computed. safe to remove for people
+                delete newItem.sequence;
+                delete newItem.durationHours;
+             }
+        }
+
+        // Course 特有初始化
+        if (type === 'courses') {
+            newItem.sessionCount = 0;
+            newItem.totalHours = 0;
+        }
+
+        return newItem;
+    });
 
     let tableName = '';
     if (type === 'teachers' || type === 'assistants') tableName = 'people';
@@ -231,7 +258,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     else if (type === 'sessions') tableName = 'sessions';
 
     // 2. 更新本地 State (Optimistic)
-    // 这样做可以确保即使云端因权限/RLS失败，用户也能在本地看到导入结果
     setState(prev => {
         let newState = { ...prev };
         
@@ -253,10 +279,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
              else newState.sessions = [...prev.sessions, ...newItems];
         }
         
-        // 如果导入的是 session 或 course，可能需要重新计算统计
         if (type === 'sessions') {
-             // 简单起见，重新遍历所有 course 计算 stats
-             // 注意：这里使用的是 newState.courses (如果是 replace 模式可能已改变)
              newState.courses = newState.courses.map(c => {
                  const cSessions = newState.sessions.filter(s => s.courseId === c.id);
                  const totalHours = cSessions.reduce((sum, s) => sum + (Number(s.durationHours) || 0), 0);
@@ -274,7 +297,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 const pType = type === 'teachers' ? 'Teacher' : 'TA';
                 await supabase.from('people').delete().eq('type', pType);
             } else {
-                // 安全起见，仅在 id 不为空时删除 (总是 true)
                 await supabase.from(tableName).delete().neq('id', '00000000-0000-0000-0000-000000000000');
             }
         }
@@ -282,8 +304,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         const { error } = await supabase.from(tableName).insert(processedData);
         if (error) throw error;
         
-        // 如果成功，不需要再 fetch，因为本地已经乐观更新了
-
     } catch (error: any) {
         console.error("Cloud Sync Error (Import):", error);
         
@@ -292,11 +312,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         else if (error instanceof Error) msg = error.message;
         else if (typeof error === 'object' && error !== null) {
             msg = error.message || error.details || error.hint || (JSON.stringify(error) !== '{}' ? JSON.stringify(error) : 'Unknown Error Object');
-        } else {
-            msg = String(error);
         }
 
-        // 使用 setTimeout 防止阻塞 UI 渲染
         setTimeout(() => {
             alert(`已导入到本地视图，但云端同步失败 (可能是权限或网络问题): ${msg}`);
         }, 100);
